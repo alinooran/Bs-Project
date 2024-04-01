@@ -14,12 +14,12 @@ var once sync.Once
 
 func GetConn() *gorm.DB {
 	once.Do(func() {
-		HOST := os.Getenv("HOST")
-		USER := os.Getenv("USER")
-		PASSWORD := os.Getenv("PASSWORD")
-		DBNAME := os.Getenv("DBNAME")
-		PORT := os.Getenv("PORT")
-		
+		HOST := os.Getenv("DB_HOST")
+		USER := os.Getenv("DB_USER")
+		PASSWORD := os.Getenv("DB_PASSWORD")
+		DBNAME := os.Getenv("DB_NAME")
+		PORT := os.Getenv("DB_PORT")
+
 		dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local", USER, PASSWORD, HOST, PORT, DBNAME)
 		db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 		if err != nil {

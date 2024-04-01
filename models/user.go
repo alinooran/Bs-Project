@@ -10,7 +10,7 @@ type User struct {
 	FirstName    string `json:"first_name"`
 	LastName     string `json:"last_name"`
 	Phone        string `json:"phone"`
-	Email        string `json:"email"`
+	Email        string `json:"email" gorm:"unique"`
 	DepartmentID uint
 	ForApproval  []Request `gorm:"foreignKey:UserIdForApproval"`
 	MyRequests   []Request

@@ -47,6 +47,16 @@ func (u *User) CreateUser(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, util.ErrResp("نام کاربری تکراری است"))
 	}
 
+	//dbUser := new(models.User)
+	err = u.db.Take(dbUser, "email=?", reqBody.Email).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return InternalServerError(c)
+	}
+
+	if dbUser.ID != 0 {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("ایمیل وارد شده از قبل در سامانه ثبت شده است"))
+	}
+
 	departmentId, err := strconv.Atoi(reqBody.DepartmentID)
 	if err != nil {
 		return InternalServerError(c)
@@ -78,7 +88,18 @@ func (u *User) CreateUser(c echo.Context) error {
 		Email:        reqBody.Email,
 		DepartmentID: uint(departmentId),
 	}
-	err = u.db.Create(newUser).Error
+
+	err = u.db.Transaction(func(tx *gorm.DB) error {
+		if err := u.db.Create(newUser).Error; err != nil {
+			return err
+		}
+		if err := util.SendEmail(reqBody.Email, reqBody.Username, reqBody.Password); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	//err = u.db.Create(newUser).Error
 	if err != nil {
 		return InternalServerError(c)
 	}
