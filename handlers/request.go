@@ -12,10 +12,10 @@ import (
 )
 
 type GuestReq struct {
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	Date      string `json:"date"`
-	Phone     string `json:"phone"`
+	FirstName    string `json:"first_name"`
+	LastName     string `json:"last_name"`
+	Date         string `json:"date"`
+	NationalCode string `json:"national_code"`
 }
 
 type RequestBody struct {
@@ -48,10 +48,10 @@ func (r *Request) CreateRequest(c echo.Context) error {
 		}
 
 		guest := models.Guest{
-			FirstName: g.FirstName,
-			LastName:  g.LastName,
-			Phone:     g.Phone,
-			Date:      date,
+			FirstName:    g.FirstName,
+			LastName:     g.LastName,
+			NationalCode: g.NationalCode,
+			Date:         date,
 		}
 
 		guests = append(guests, guest)
@@ -77,11 +77,11 @@ func (r *Request) GetRequests(c echo.Context) error {
 	cat := c.QueryParam("cat")
 
 	if cat == "sent" {
-		err = r.db.Find(&requests, "user_id=? and sent=true", c.Get("id").(uint)).Error
+		err = r.db.Order("id desc").Find(&requests, "user_id=? and sent=true", c.Get("id").(uint)).Error
 	} else if cat == "unsent" {
 		err = r.db.Find(&requests, "user_id=? and sent=false", c.Get("id").(uint)).Error
 	} else if cat == "forApproval" {
-		err = r.db.Find(&requests, "user_id_for_approval=? and sent=true", c.Get("id").(uint)).Error
+		err = r.db.Order("sent_date asc").Find(&requests, "user_id_for_approval=? and sent=true", c.Get("id").(uint)).Error
 	}
 	if err != nil {
 		return InternalServerError(c)

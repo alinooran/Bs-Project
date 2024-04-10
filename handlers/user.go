@@ -109,16 +109,39 @@ func (u *User) CreateUser(c echo.Context) error {
 	})
 }
 
-func (u *User) GetUsers(c echo.Context) error {
-	var users []models.User
-	err := u.db.Omit("password").Find(&users).Error
+//func (u *User) GetUsers(c echo.Context) error {
+//	var users []models.User
+//	err := u.db.Omit("password").Find(&users).Error
+//	if err != nil {
+//		return InternalServerError(c)
+//	}
+//
+//	return c.JSON(http.StatusOK, echo.Map{
+//		"message": "OK",
+//		"data":    users,
+//	})
+
+func (u *User) GetUser(c echo.Context) error {
+	userId := c.Get("id").(uint)
+	dbUser := new(models.User)
+	err := u.db.Select("username", "first_name", "last_name", "phone", "email").Take(dbUser, userId).Error
 	if err != nil {
-		return InternalServerError(c)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.JSON(http.StatusBadRequest, util.ErrResp("کاربر مورد نظر یافت نشد"))
+		} else {
+			return InternalServerError(c)
+		}
 	}
 
 	return c.JSON(http.StatusOK, echo.Map{
 		"message": "OK",
-		"data":    users,
+		"data": echo.Map{
+			"username":   dbUser.Username,
+			"first_name": dbUser.FirstName,
+			"last_name":  dbUser.LastName,
+			"phone":      dbUser.Phone,
+			"email":      dbUser.Email,
+		},
 	})
 }
 
@@ -136,5 +159,98 @@ func (u *User) GetProfile(c echo.Context) error {
 	return c.JSON(http.StatusOK, echo.Map{
 		"name": dbUser.FirstName + " " + dbUser.LastName,
 		"role": dbUser.Role,
+	})
+}
+
+func (u *User) EditPassword(c echo.Context) error {
+	reqBody := &struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}{}
+	if err := c.Bind(reqBody); err != nil {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("invalid request body"))
+	}
+
+	userId := c.Get("id").(uint)
+	dbUser := new(models.User)
+	err := u.db.Take(dbUser, userId).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return InternalServerError(c)
+	}
+
+	if dbUser.ID == 0 {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("کاربر مورد نظر یافت نشد"))
+	}
+
+	if !util.VerifyPassword(dbUser.Password, reqBody.OldPassword) {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("رمز عبور وارد شده صحیح نیست"))
+	}
+
+	newPassword, err := util.HashPassword(reqBody.NewPassword)
+	if err != nil {
+		return InternalServerError(c)
+	}
+
+	err = u.db.Model(dbUser).Update("password", newPassword).Error
+	if err != nil {
+		return InternalServerError(c)
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{
+		"message": "OK",
+	})
+}
+
+func (u *User) EditUser(c echo.Context) error {
+	userId := c.Get("id").(uint)
+	reqBody := new(models.User)
+	if err := c.Bind(reqBody); err != nil {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("invalid request body"))
+	}
+
+	dbUser := new(models.User)
+	err := u.db.Take(dbUser, userId).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.JSON(http.StatusBadRequest, util.ErrResp("کاربر مورد نظر یافت نشد"))
+		} else {
+			return InternalServerError(c)
+		}
+	}
+
+	err = u.db.Take(&models.User{}, "id <> ? AND username = ?", userId, reqBody.Username).Error
+	exists := true
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			exists = false
+		} else {
+			return InternalServerError(c)
+		}
+	}
+	if exists {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("نام کاربری تکراری است"))
+	}
+
+	err = u.db.Take(&models.User{}, "id <> ? AND email = ?", userId, reqBody.Email).Error
+	exists = true
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			exists = false
+		} else {
+			return InternalServerError(c)
+		}
+	}
+	if exists {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("ایمیل وارد شده از قبل در سامانه ثبت شده است"))
+	}
+
+	err = u.db.Model(dbUser).Updates(reqBody).Error
+
+	if err != nil {
+		return InternalServerError(c)
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{
+		"message": "OK",
 	})
 }
