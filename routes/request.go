@@ -13,11 +13,15 @@ func ApplyRequestRoutes(g *echo.Group, db *gorm.DB) {
 
 	g.POST("", requestHandler.CreateRequest)
 	g.GET("", requestHandler.GetRequests)
-	g.DELETE("/:id", requestHandler.DeleteRequest)
-	g.POST("/:id", requestHandler.SendRequest)
-	g.GET("/:id", requestHandler.GetRequest)
-	g.POST("/dean_approval/:id", requestHandler.DeanApproval)
-	g.POST("/dean_disapproval/:id", requestHandler.DeanDisapproval)
-	g.POST("/security_approval/:id", requestHandler.SecurityApproval)
-	g.POST("/security_disapproval/:id", requestHandler.SecurityDisapproval)
+
+	request := g.Group("/:id", middleware.ParseRequestID)
+
+	request.DELETE("", requestHandler.DeleteRequest)
+	request.POST("", requestHandler.SendRequest)
+	request.GET("", requestHandler.GetRequest)
+	request.GET("/workflow", requestHandler.GetWorkflows)
+	request.GET("/guest", requestHandler.GetGuests)
+	request.POST("/approve", requestHandler.Approve)
+	request.POST("/reject", requestHandler.Reject)
+	request.POST("/close", requestHandler.CloseRequest)
 }

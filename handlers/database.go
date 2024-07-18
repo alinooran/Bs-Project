@@ -12,6 +12,8 @@ type Database struct {
 	db *gorm.DB
 }
 
+var MODELS = []interface{}{&models.Department{}, &models.Guest{}, &models.Request{}, &models.User{}, &models.Role{}, &models.Workflow{}}
+
 func NewDatabaseHandler(db *gorm.DB) *Database {
 	return &Database{
 		db: db,
@@ -19,7 +21,7 @@ func NewDatabaseHandler(db *gorm.DB) *Database {
 }
 
 func (d *Database) CreateDB(c echo.Context) error {
-	err := d.db.AutoMigrate(&models.Department{}, &models.Guest{}, &models.Request{}, &models.User{}, &models.Role{})
+	err := d.db.AutoMigrate(MODELS...)
 	if err != nil {
 		return c.JSON(http.StatusOK, err)
 	}
@@ -27,6 +29,6 @@ func (d *Database) CreateDB(c echo.Context) error {
 }
 
 func (d *Database) DeleteDB(c echo.Context) error {
-	_ = d.db.Migrator().DropTable(&models.Department{}, &models.Guest{}, &models.Request{}, &models.User{}, &models.Role{})
+	_ = d.db.Migrator().DropTable(MODELS...)
 	return c.JSON(http.StatusOK, "OK")
 }

@@ -9,3 +9,7 @@ import (
 func InternalServerError(c echo.Context) error {
 	return c.JSON(http.StatusInternalServerError, util.ErrResp("خطایی در سرور رخ داده است"))
 }
+
+func RequestBodyError(c echo.Context) error {
+	return c.JSON(http.StatusBadRequest, util.ErrResp("بدنه درخواست معتبر نیست"))
+}

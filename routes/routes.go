@@ -11,8 +11,7 @@ func ApplyRoutes(e *echo.Echo, db *gorm.DB) {
 	ApplyDBRoutes(api.Group("/db"), db)
 	ApplyAuthRoutes(api.Group("/auth"), db)
 	ApplyUserRoutes(api.Group("/user"), db)
-	ApplyRoleRoutes(api.Group("/role"), db)
-	ApplyDepartmentRoutes(api.Group("/department"), db)
 	ApplyRequestRoutes(api.Group("/request"), db)
 	ApplyGuestRoutes(api.Group("/guest"), db)
+	ApplyDepartmentRoutes(api.Group("/department"), db)
 }

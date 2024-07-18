@@ -13,6 +13,4 @@ ENV DB_NAME="bs_project"
 ENV DB_PORT="3306"
 ENV JWT_SECRET_KEY="jwtsecretkey"
 ENV HASH_COST=15
-ENV EMAIL="sbuproject403@gmail.com"
-ENV EMAIL_PASS="ekvljsbtzjmparoy"
 CMD ["go", "run", "main.go"]

@@ -7,21 +7,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
 	"net/http"
-	"strconv"
 	"time"
 )
-
-type GuestReq struct {
-	FirstName    string `json:"first_name"`
-	LastName     string `json:"last_name"`
-	Date         string `json:"date"`
-	NationalCode string `json:"national_code"`
-}
-
-type RequestBody struct {
-	Description string     `json:"description"`
-	Guests      []GuestReq `json:"guests"`
-}
 
 type Request struct {
 	db *gorm.DB
@@ -34,34 +21,27 @@ func NewRequestHandler(db *gorm.DB) *Request {
 }
 
 func (r *Request) CreateRequest(c echo.Context) error {
-	reqBody := new(RequestBody)
+	reqBody := &struct {
+		Date   string         `json:"date"`
+		Guests []models.Guest `json:"guests"`
+	}{}
+
 	if err := c.Bind(&reqBody); err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("invalid request body"))
+		return RequestBodyError(c)
 	}
 
 	userID := c.Get("id").(uint)
-	guests := []models.Guest{}
-	for _, g := range reqBody.Guests {
-		date, err := time.Parse("2006/01/02", g.Date)
-		if err != nil {
-			return InternalServerError(c)
-		}
-
-		guest := models.Guest{
-			FirstName:    g.FirstName,
-			LastName:     g.LastName,
-			NationalCode: g.NationalCode,
-			Date:         date,
-		}
-
-		guests = append(guests, guest)
+	date, err := time.Parse("2006/01/02", reqBody.Date)
+	if err != nil {
+		return InternalServerError(c)
 	}
 
 	request := new(models.Request)
-	request.Description = reqBody.Description
-	request.Guests = guests
+	request.Guests = reqBody.Guests
+	request.Date = date
 	request.UserID = userID
-	err := r.db.Create(request).Error
+
+	err = r.db.Create(request).Error
 	if err != nil {
 		return InternalServerError(c)
 	}
@@ -81,7 +61,7 @@ func (r *Request) GetRequests(c echo.Context) error {
 	} else if cat == "unsent" {
 		err = r.db.Find(&requests, "user_id=? and sent=false", c.Get("id").(uint)).Error
 	} else if cat == "forApproval" {
-		err = r.db.Order("sent_date asc").Find(&requests, "user_id_for_approval=? and sent=true", c.Get("id").(uint)).Error
+		err = r.db.Find(&requests, "user_id_for_approval=? and sent=true", c.Get("id").(uint)).Error
 	}
 	if err != nil {
 		return InternalServerError(c)
@@ -94,13 +74,10 @@ func (r *Request) GetRequests(c echo.Context) error {
 }
 
 func (r *Request) GetRequest(c echo.Context) error {
-	reqID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("شناسه درخواست معتبر نیست"))
-	}
+	reqID := c.Get("request_id").(uint)
 
 	request := new(models.Request)
-	err = r.db.Preload("Guests").Take(request, uint(reqID)).Error
+	err := r.db.Preload("Guests").Take(request, reqID).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return InternalServerError(c)
 	}
@@ -115,17 +92,14 @@ func (r *Request) GetRequest(c echo.Context) error {
 }
 
 func (r *Request) DeleteRequest(c echo.Context) error {
-	reqID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("شناسه درخواست معتبر نیست"))
-	}
+	reqID := c.Get("request_id").(uint)
 
-	err = r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Delete(&models.Request{}, "id=?", uint(reqID)).Error; err != nil {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&models.Request{}, "id=?", reqID).Error; err != nil {
 			return err
 		}
 
-		if err := tx.Delete(&models.Guest{}, "request_id=?", uint(reqID)).Error; err != nil {
+		if err := tx.Delete(&models.Guest{}, "request_id=?", reqID).Error; err != nil {
 			return err
 		}
 
@@ -141,13 +115,114 @@ func (r *Request) DeleteRequest(c echo.Context) error {
 }
 
 func (r *Request) SendRequest(c echo.Context) error {
-	reqID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("شناسه درخواست معتبر نیست"))
+	reqBody := &struct {
+		Description string `json:"description"`
+	}{}
+	if err := c.Bind(reqBody); err != nil {
+		return RequestBodyError(c)
 	}
+
+	reqID := c.Get("request_id").(uint)
 
 	userID := c.Get("id").(uint)
 	userRole := c.Get("role").(string)
+
+	user := new(models.User)
+	err := r.db.Take(user, userID).Error
+	if err != nil {
+		return InternalServerError(c)
+	}
+
+	request := new(models.Request)
+	err = r.db.Take(request, reqID).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return InternalServerError(c)
+	}
+	if request.ID == 0 {
+		return c.JSON(http.StatusNotFound, util.ErrResp("درخواست یافت نشد"))
+	}
+
+	request.Sent = true
+	request.FinalStatus = nil
+
+	workflow := &models.Workflow{
+		SenderName:  user.FirstName + " " + user.LastName,
+		Step:        "ارسال توسط کاربر",
+		Description: reqBody.Description,
+		RequestID:   reqID,
+	}
+
+	if userRole == "user" {
+		dean := new(models.User)
+		err = r.db.Select("id").Take(dean, "department_id=? and role=?", user.DepartmentID, "dean").Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return InternalServerError(c)
+		}
+		if dean.ID == 0 {
+			return c.JSON(http.StatusNotFound, util.ErrResp("ریاست این بخش مشخص نشده است"))
+		}
+		request.UserIdForApproval = &dean.ID
+	} else if userRole == "dean" {
+		securityDean := new(models.User)
+		err = r.db.Take(securityDean, "role=?", "securityDean").Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return InternalServerError(c)
+		}
+		if securityDean.ID == 0 {
+			return c.JSON(http.StatusNotFound, util.ErrResp("ریاست حراست مشخص نشده است"))
+		}
+
+		request.UserIdForApproval = &securityDean.ID
+	} else {
+		request.UserIdForApproval = nil
+		approved := true
+		request.FinalStatus = &approved
+	}
+
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		err := tx.Create(workflow).Error
+		if err != nil {
+			return err
+		}
+
+		err = tx.Save(request).Error
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return InternalServerError(c)
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{
+		"message": "OK",
+	})
+}
+
+func (r *Request) Approve(c echo.Context) error {
+	reqID := c.Get("request_id").(uint)
+
+	userRole := c.Get("role").(string)
+	if userRole == "user" {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("این حساب به این امکان دسترسی ندارد"))
+	}
+
+	request := new(models.Request)
+	err := r.db.Take(request, reqID).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return InternalServerError(c)
+	}
+	if request.ID == 0 {
+		return c.JSON(http.StatusNotFound, util.ErrResp("درخواست یافت نشد"))
+	}
+
+	userID := c.Get("id").(uint)
+
+	if userID != *request.UserIdForApproval {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("کاربر مجاز به انجام این عملیات نیست"))
+	}
 
 	user := new(models.User)
 	err = r.db.Take(user, userID).Error
@@ -155,119 +230,45 @@ func (r *Request) SendRequest(c echo.Context) error {
 		return InternalServerError(c)
 	}
 
-	request := new(models.Request)
-	err = r.db.Take(request, reqID).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return InternalServerError(c)
-	}
-	if request.ID == 0 {
-		return c.JSON(http.StatusNotFound, util.ErrResp("درخواست یافت نشد"))
+	approved := true
+
+	workflow := &models.Workflow{
+		SenderName: user.FirstName + " " + user.LastName,
+		RequestID:  reqID,
+		Status:     &approved,
 	}
 
-	if userRole == "user" {
-		dean := new(models.User)
-		err = r.db.Take(dean, "department_id=? and role=?", user.DepartmentID, "dean").Error
+	if userRole == "dean" {
+		securityDean := new(models.User)
+		err = r.db.Take(securityDean, "role=?", "securityDean").Error
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return InternalServerError(c)
 		}
-		if dean.ID == 0 {
-			return c.JSON(http.StatusNotFound, util.ErrResp("ریاست این بخش مشخص نشده است"))
+		if securityDean.ID == 0 {
+			return c.JSON(http.StatusNotFound, util.ErrResp("ریاست حراست مشخص نشده است"))
 		}
 
-		request.UserIdForApproval = &dean.ID
-		request.Sent = true
-		now := time.Now()
-		request.SentDate = &now
-
-		err = r.db.Save(request).Error
-		if err != nil {
-			return InternalServerError(c)
-		}
-
+		request.UserIdForApproval = &securityDean.ID
+		workflow.Step = "تایید ریاست بخش"
 	} else {
-		securityDep := new(models.Department)
-		err = r.db.Take(securityDep, "name=?", "حراست کل").Error
+		request.FinalStatus = &approved
+		workflow.Step = "تایید حراست"
+		request.UserIdForApproval = nil
+	}
+
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		err := tx.Create(workflow).Error
 		if err != nil {
-			return InternalServerError(c)
+			return err
 		}
 
-		if userRole == "securityDean" {
-			//request.FinalApproval = true
-			approved := true
-			request.DepartmentApproval = &approved
-			request.SecurityApproval = &approved
-			request.Sent = true
-			now := time.Now()
-			request.SentDate = &now
-		} else if userRole == "dean" {
-			securityDean := new(models.User)
-			err = r.db.Take(securityDean, "role=? and department_id=?", "securityDean", securityDep.ID).Error
-			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				return InternalServerError(c)
-			}
-			if securityDean.ID == 0 {
-				return c.JSON(http.StatusNotFound, util.ErrResp("ریاست حراست مشخص نشده است"))
-			}
-
-			approved := true
-			request.DepartmentApproval = &approved
-			request.Sent = true
-			request.UserIdForApproval = &securityDean.ID
-			now := time.Now()
-			request.SentDate = &now
-		}
-		err = r.db.Save(request).Error
+		err = tx.Save(request).Error
 		if err != nil {
-			return InternalServerError(c)
+			return err
 		}
-	}
-	return c.JSON(http.StatusOK, echo.Map{
-		"message": "OK",
+
+		return nil
 	})
-}
-
-func (r *Request) DeanApproval(c echo.Context) error {
-	reqID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("شناسه درخواست معتبر نیست"))
-	}
-
-	userRole := c.Get("role").(string)
-	if userRole != "dean" {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("این حساب به این امکان دسترسی ندارد"))
-	}
-
-	request := new(models.Request)
-	err = r.db.Take(request, reqID).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return InternalServerError(c)
-	}
-	if request.ID == 0 {
-		return c.JSON(http.StatusNotFound, util.ErrResp("درخواست یافت نشد"))
-	}
-
-	security := new(models.Department)
-	err = r.db.Take(security, "name=?", "حراست کل").Error
-	if err != nil {
-		return InternalServerError(c)
-	}
-
-	securityDean := new(models.User)
-	err = r.db.Take(securityDean, "role=? and department_id=?", "securityDean", security.ID).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return InternalServerError(c)
-	}
-	if securityDean.ID == 0 {
-		return c.JSON(http.StatusNotFound, util.ErrResp("ریاست حراست مشخص نشده است"))
-	}
-
-	request.UserIdForApproval = &securityDean.ID
-	approved := true
-	request.DepartmentApproval = &approved
-	now := time.Now()
-	request.SentDate = &now
-
-	err = r.db.Save(request).Error
 	if err != nil {
 		return InternalServerError(c)
 	}
@@ -277,19 +278,23 @@ func (r *Request) DeanApproval(c echo.Context) error {
 	})
 }
 
-func (r *Request) DeanDisapproval(c echo.Context) error {
-	reqID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("شناسه درخواست معتبر نیست"))
+func (r *Request) Reject(c echo.Context) error {
+	reqBody := &struct {
+		Description string `json:"description"`
+	}{}
+	if err := c.Bind(reqBody); err != nil {
+		return RequestBodyError(c)
 	}
 
+	reqID := c.Get("request_id").(uint)
+
 	userRole := c.Get("role").(string)
-	if userRole != "dean" {
+	if userRole == "user" {
 		return c.JSON(http.StatusBadRequest, util.ErrResp("این حساب به این امکان دسترسی ندارد"))
 	}
 
 	request := new(models.Request)
-	err = r.db.Take(request, reqID).Error
+	err := r.db.Take(request, reqID).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return InternalServerError(c)
 	}
@@ -297,11 +302,50 @@ func (r *Request) DeanDisapproval(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, util.ErrResp("درخواست یافت نشد"))
 	}
 
-	disapproved := false
-	request.DepartmentApproval = &disapproved
-	request.UserIdForApproval = nil
+	userID := c.Get("id").(uint)
 
-	err = r.db.Save(request).Error
+	if userID != *request.UserIdForApproval {
+		return c.JSON(http.StatusBadRequest, util.ErrResp("کاربر مجاز به انجام این عملیات نیست"))
+	}
+
+	user := new(models.User)
+	err = r.db.Take(user, userID).Error
+	if err != nil {
+		return InternalServerError(c)
+	}
+
+	approved := false
+
+	workflow := &models.Workflow{
+		SenderName:  user.FirstName + " " + user.LastName,
+		RequestID:   reqID,
+		Status:      &approved,
+		Description: reqBody.Description,
+	}
+
+	if userRole == "dean" {
+		request.UserIdForApproval = nil
+		workflow.Step = "تایید ریاست بخش"
+	} else {
+		workflow.Step = "تایید حراست"
+		request.UserIdForApproval = nil
+	}
+	request.FinalStatus = &approved
+	request.Sent = false
+
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		err := tx.Create(workflow).Error
+		if err != nil {
+			return err
+		}
+
+		err = tx.Save(request).Error
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
 	if err != nil {
 		return InternalServerError(c)
 	}
@@ -311,52 +355,42 @@ func (r *Request) DeanDisapproval(c echo.Context) error {
 	})
 }
 
-func (r *Request) SecurityApproval(c echo.Context) error {
-	reqID, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("شناسه درخواست معتبر نیست"))
-	}
+func (r *Request) GetWorkflows(c echo.Context) error {
+	reqID := c.Get("request_id").(uint)
 
-	userRole := c.Get("role").(string)
-	if userRole != "securityDean" {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("این حساب به این امکان دسترسی ندارد"))
-	}
+	workflows := []models.Workflow{}
 
-	request := new(models.Request)
-	err = r.db.Take(request, reqID).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return InternalServerError(c)
-	}
-	if request.ID == 0 {
-		return c.JSON(http.StatusNotFound, util.ErrResp("درخواست یافت نشد"))
-	}
-
-	approved := true
-	request.SecurityApproval = &approved
-	request.UserIdForApproval = nil
-	err = r.db.Save(request).Error
+	err := r.db.Find(&workflows, "request_id=?", reqID).Error
 	if err != nil {
 		return InternalServerError(c)
 	}
 
 	return c.JSON(http.StatusOK, echo.Map{
 		"message": "OK",
+		"data":    workflows,
 	})
 }
 
-func (r *Request) SecurityDisapproval(c echo.Context) error {
-	reqID, err := strconv.Atoi(c.Param("id"))
+func (r *Request) GetGuests(c echo.Context) error {
+	reqID := c.Get("request_id").(uint)
+
+	guests := []models.Guest{}
+
+	err := r.db.Find(&guests, "request_id=?", reqID).Error
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("شناسه درخواست معتبر نیست"))
+		return InternalServerError(c)
 	}
 
-	userRole := c.Get("role").(string)
-	if userRole != "securityDean" {
-		return c.JSON(http.StatusBadRequest, util.ErrResp("این حساب به این امکان دسترسی ندارد"))
-	}
+	return c.JSON(http.StatusOK, echo.Map{
+		"message": "OK",
+		"data":    guests,
+	})
+}
 
+func (r *Request) CloseRequest(c echo.Context) error {
+	reqID := c.Get("request_id").(uint)
 	request := new(models.Request)
-	err = r.db.Take(request, reqID).Error
+	err := r.db.Take(request, reqID).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return InternalServerError(c)
 	}
@@ -364,16 +398,11 @@ func (r *Request) SecurityDisapproval(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, util.ErrResp("درخواست یافت نشد"))
 	}
 
-	disapproved := false
-	request.SecurityApproval = &disapproved
-	request.UserIdForApproval = nil
-
+	request.Sent = true
 	err = r.db.Save(request).Error
 	if err != nil {
 		return InternalServerError(c)
 	}
 
-	return c.JSON(http.StatusOK, echo.Map{
-		"message": "OK",
-	})
+	return c.JSON(http.StatusOK, nil)
 }

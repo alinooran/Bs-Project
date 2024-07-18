@@ -7,13 +7,11 @@ import (
 
 type Request struct {
 	gorm.Model
-	DepartmentApproval *bool `json:"department_approval"`
-	SecurityApproval   *bool `json:"security_approval"`
-	//FinalApproval      bool       `json:"final_approval"`
-	Description       string     `json:"description"`
-	Sent              bool       `json:"sent"`
-	SentDate          *time.Time `json:"sent_date"`
+	Date              time.Time `json:"date"`
+	Sent              bool      `json:"sent"`
+	FinalStatus       *bool     `json:"final_status"`
 	UserID            uint
 	UserIdForApproval *uint
-	Guests            []Guest `json:"guests"`
+	Workflows         []Workflow `json:"workflows"`
+	Guests            []Guest    `json:"guests"`
 }

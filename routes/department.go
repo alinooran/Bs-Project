@@ -10,5 +10,5 @@ import (
 func ApplyDepartmentRoutes(g *echo.Group, db *gorm.DB) {
 	departmentHandler := handlers.NewDepartmentHandler(db)
 
-	g.GET("", departmentHandler.GetDepartments, middleware.AdminAccess)
+	g.GET("", departmentHandler.GetDepartments, middleware.NormalAccess)
 }
