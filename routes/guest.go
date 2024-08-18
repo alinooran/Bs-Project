@@ -13,4 +13,5 @@ func ApplyGuestRoutes(g *echo.Group, db *gorm.DB) {
 
 	g.GET("", guestHandler.GetTodayGuests)
 	g.POST("/:id", guestHandler.RecordEntry)
+	g.POST("/report", guestHandler.GetReport)
 }

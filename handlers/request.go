@@ -55,13 +55,40 @@ func (r *Request) GetRequests(c echo.Context) error {
 	requests := []models.Request{}
 	var err error
 	cat := c.QueryParam("cat")
+	userId := c.Get("id").(uint)
+	role := c.Get("role").(string)
 
 	if cat == "sent" {
-		err = r.db.Order("id desc").Find(&requests, "user_id=? and sent=true", c.Get("id").(uint)).Error
+		err = r.db.Order("id desc").Find(&requests, "user_id=? and sent=true", userId).Error
 	} else if cat == "unsent" {
-		err = r.db.Find(&requests, "user_id=? and sent=false", c.Get("id").(uint)).Error
+		err = r.db.Find(&requests, "user_id=? and sent=false", userId).Error
 	} else if cat == "forApproval" {
-		err = r.db.Find(&requests, "user_id_for_approval=? and sent=true", c.Get("id").(uint)).Error
+		err = r.db.Find(&requests, "user_id_for_approval=? and sent=true", userId).Error
+	} else {
+		var departmentId uint
+		err = r.db.Table("users").Select("department_id").Where("id = ?", userId).Scan(&departmentId).Error
+		if err != nil {
+			return InternalServerError(c)
+		}
+		if cat == "approved" {
+			query := r.db.Table("requests").Select("requests.*").Joins("JOIN users ON requests.user_id = users.id").
+				Where("requests.deleted_at IS NULL AND users.department_id = ?", departmentId).Order("updated_at desc")
+			if role == "dean" {
+				query = query.Where("requests.dean_approval = ?", 1)
+			} else if role == "securityDean" {
+				query = query.Where("requests.security_approval = ?", 1)
+			}
+			err = query.Scan(&requests).Error
+		} else if cat == "disapproved" {
+			query := r.db.Table("requests").Select("requests.*").Joins("JOIN users ON requests.user_id = users.id").
+				Where("requests.deleted_at IS NULL AND users.department_id = ?", departmentId).Order("updated_at desc")
+			if role == "dean" {
+				query = query.Where("requests.dean_approval = ?", 0)
+			} else if role == "securityDean" {
+				query = query.Where("requests.security_approval = ?", 0)
+			}
+			err = query.Scan(&requests).Error
+		}
 	}
 	if err != nil {
 		return InternalServerError(c)
@@ -152,6 +179,8 @@ func (r *Request) SendRequest(c echo.Context) error {
 		RequestID:   reqID,
 	}
 
+	approved := true
+
 	if userRole == "user" {
 		dean := new(models.User)
 		err = r.db.Select("id").Take(dean, "department_id=? and role=?", user.DepartmentID, "dean").Error
@@ -161,7 +190,9 @@ func (r *Request) SendRequest(c echo.Context) error {
 		if dean.ID == 0 {
 			return c.JSON(http.StatusNotFound, util.ErrResp("ریاست این بخش مشخص نشده است"))
 		}
-		request.UserIdForApproval = &dean.ID
+		if request.UserIdForApproval == nil {
+			request.UserIdForApproval = &dean.ID
+		}
 	} else if userRole == "dean" {
 		securityDean := new(models.User)
 		err = r.db.Take(securityDean, "role=?", "securityDean").Error
@@ -171,11 +202,13 @@ func (r *Request) SendRequest(c echo.Context) error {
 		if securityDean.ID == 0 {
 			return c.JSON(http.StatusNotFound, util.ErrResp("ریاست حراست مشخص نشده است"))
 		}
-
-		request.UserIdForApproval = &securityDean.ID
+		if request.UserIdForApproval == nil {
+			request.UserIdForApproval = &securityDean.ID
+		}
+		request.DeanApproval = &approved
 	} else {
 		request.UserIdForApproval = nil
-		approved := true
+		request.SecurityApproval = &approved
 		request.FinalStatus = &approved
 	}
 
@@ -249,9 +282,11 @@ func (r *Request) Approve(c echo.Context) error {
 		}
 
 		request.UserIdForApproval = &securityDean.ID
+		request.DeanApproval = &approved
 		workflow.Step = "تایید ریاست بخش"
 	} else {
 		request.FinalStatus = &approved
+		request.SecurityApproval = &approved
 		workflow.Step = "تایید حراست"
 		request.UserIdForApproval = nil
 	}
@@ -324,11 +359,13 @@ func (r *Request) Reject(c echo.Context) error {
 	}
 
 	if userRole == "dean" {
-		request.UserIdForApproval = nil
+		request.UserIdForApproval = &userID
+		request.DeanApproval = &approved
 		workflow.Step = "تایید ریاست بخش"
 	} else {
 		workflow.Step = "تایید حراست"
-		request.UserIdForApproval = nil
+		request.UserIdForApproval = &userID
+		request.SecurityApproval = &approved
 	}
 	request.FinalStatus = &approved
 	request.Sent = false
